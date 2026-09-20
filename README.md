@@ -7,7 +7,10 @@ PDF → Extraction (PyMuPDF) → Chunking → Vector Pipeline (OpenAI + FAISS) +
 - Frontend: Streamlit
 - Backend: FastAPI
 - Vector store: FAISS (local, on disk)
-- Knowledge graph: Neo4j AuraDB (online)
+- Knowledge graph: Neo4j — either AuraDB (online) **or** a local self-hosted Neo4j
+  Community container (included in `docker-compose.yml`, always on, no auto-pause).
+  Which one is used is decided purely by `NEO4J_URI`/`NEO4J_USERNAME`/`NEO4J_PASSWORD`
+  in `.env` — the backend code doesn't change.
 - LLM/embeddings: OpenAI
 - PDF extraction: PyMuPDF
 - Guardrails: deterministic, in `backend/guardrails/` (no extra LLM calls)
@@ -49,8 +52,22 @@ hybrid-rag/
 ### Prerequisites
 - Python 3.11+
 - An OpenAI API key
-- A free Neo4j AuraDB instance: https://console.neo4j.io → "New Instance" (Free tier) →
-  download the generated credentials file (URI, username, password)
+- A Neo4j database to connect to — either:
+  - **Local (recommended for dev)**: run just the Neo4j container standalone, even
+    though the rest of the app runs outside Docker:
+    ```bash
+    docker run -d --name hybrid_rag_neo4j \
+      -p 7474:7474 -p 7687:7687 \
+      -e NEO4J_AUTH=neo4j/changeme12345 \
+      -v neo4j_data:/data \
+      neo4j:5.24-community
+    ```
+    Then in `.env` use `NEO4J_URI=bolt://localhost:7687` and matching password.
+    Always on, no pausing — good for iterating locally.
+  - **AuraDB (online)**: https://console.neo4j.io → "New Instance" (Free tier) →
+    download the generated credentials file (URI, username, password). Note: Aura
+    Free auto-pauses after a few days idle; you'll need to "Resume" it in the
+    console before reconnecting.
 
 ### Steps
 
@@ -86,17 +103,18 @@ API docs (Swagger) are at http://localhost:8000/docs.
 ## 2. Convert to Docker
 
 Everything is already Dockerized (`backend/Dockerfile`, `frontend/Dockerfile`,
-`docker-compose.yml`). Neo4j AuraDB is a managed cloud service, so it does **not** run in a
-container — only your `.env` needs to point to it.
+`docker-compose.yml`), and `docker-compose.yml` includes a **local Neo4j Community**
+service by default — no AuraDB pausing to worry about.
 
 ```bash
 cd hybrid-rag
-cp .env.example .env     # fill in your real keys/credentials
+cp .env.example .env     # fill in OPENAI_API_KEY; Neo4j vars already default to local
 
-# Build and start both services
+# Build and start all three services (neo4j, backend, frontend)
 docker compose up --build -d
 
 # Check logs
+docker compose logs -f neo4j
 docker compose logs -f backend
 docker compose logs -f frontend
 
@@ -106,7 +124,18 @@ docker compose down
 
 - Backend: http://localhost:8000 (docs at `/docs`)
 - Frontend: http://localhost:8501
-- FAISS index persists in the `faiss_storage` named volume, so it survives container restarts.
+- Neo4j Browser (optional, to inspect the graph): http://localhost:7474 — log in with
+  username `neo4j` and the `NEO4J_PASSWORD` from your `.env`.
+- FAISS index persists in the `faiss_storage` volume; graph data persists in `neo4j_data`
+  — both survive container restarts. `docker compose down -v` wipes everything.
+
+### Switching to AuraDB instead of local Neo4j
+1. In `.env`, comment out the local `NEO4J_URI=bolt://neo4j:7687` line and uncomment/fill
+   in the `neo4j+s://...` AuraDB block instead.
+2. In `docker-compose.yml`, you can leave the `neo4j` service defined (it'll just sit
+   unused) or delete it along with `depends_on: neo4j` under `backend` and the
+   `neo4j_data`/`neo4j_logs` volumes — either way works, since only the env vars decide
+   what the backend connects to.
 
 ---
 
